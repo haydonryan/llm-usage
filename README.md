@@ -102,8 +102,8 @@ The app prints a summary per usage bucket (weekly limits and other limits if ava
 
 ```
 Kimi usage
-Limit #1     : [██░░░░░░░░░░░░░░░░]  10% used (resets 05:37 on Sun Mar 8)
-Weekly limit : [██░░░░░░░░░░░░░░░░]  10% used (resets 19:37 on Sat Mar 14)
+Limit #1     : [██░░░░░░░░░░░░░░░░░░]  10% used (resets 05:37 on Sun Mar 8)
+Weekly limit : [████░░░░░░░░░░░░░░░░]  20% used (resets 19:37 on Sat Mar 14)
 Week progress: [-----               ]  25% elapsed
 ```
 
@@ -121,7 +121,7 @@ Example:
 Codex usage limits
 Plan: plus
 5h limit     : [██████░░░░░░░░░░░░░░]  30% used (resets 22:26 on Sat Mar 14)
-Weekly limit : [████████░░░░░░░░░░]  40% used (resets 18:26 on Sat Mar 14)
+Weekly limit : [████████░░░░░░░░░░░░]  40% used (resets 18:26 on Sat Mar 14)
 Week progress: [----------          ]  50% elapsed
 ```
 
