@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use clap::{Parser, Subcommand};
-use directories::ProjectDirs;
+use directories::{BaseDirs, ProjectDirs};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
@@ -24,6 +24,8 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com";
 const DEFAULT_CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const TOKEN_FILENAME: &str = "token.json";
 const DEVICE_ID_FILENAME: &str = "device_id";
+const CONFIG_DIR_NAME: &str = "llm-usage";
+const CONFIG_FILENAME: &str = "llm-usage.toml";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -65,6 +67,8 @@ enum KimiCommand {
     Login,
     /// Fetch usage from the Kimi Code usage endpoint
     Usage(KimiUsageArgs),
+    /// Store a Kimi access token directly
+    SetToken(KimiSetTokenArgs),
     /// Remove stored tokens
     Logout,
 }
@@ -77,6 +81,13 @@ struct KimiUsageArgs {
     /// Use a provided access token instead of the stored token
     #[arg(long, value_name = "TOKEN")]
     token: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct KimiSetTokenArgs {
+    /// Kimi access token to store
+    #[arg(value_name = "TOKEN")]
+    token: String,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -256,7 +267,7 @@ fn print_json<T: Serialize>(value: &T) -> Result<()> {
 fn run_kimi_command(command: KimiCommand, global_token: Option<String>, json: bool) -> Result<()> {
     if json {
         match command {
-            KimiCommand::Login | KimiCommand::Logout => {
+            KimiCommand::Login | KimiCommand::Logout | KimiCommand::SetToken(_) => {
                 return Err(anyhow!("`--json` is only supported for usage commands."));
             }
             KimiCommand::Usage(_) => {}
@@ -270,6 +281,7 @@ fn run_kimi_command(command: KimiCommand, global_token: Option<String>, json: bo
             }
             run_kimi_usage(args, true, json)
         }
+        KimiCommand::SetToken(args) => kimi_set_token(args),
         KimiCommand::Logout => kimi_logout(),
     }
 }
@@ -391,10 +403,34 @@ fn kimi_login() -> Result<()> {
     }
 }
 
+fn kimi_set_token(args: KimiSetTokenArgs) -> Result<()> {
+    let trimmed = args.token.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Token cannot be empty."));
+    }
+    let token = StoredToken {
+        access_token: trimmed.to_string(),
+        refresh_token: String::new(),
+        expires_at: 0,
+        scope: String::new(),
+        token_type: String::new(),
+    };
+    save_token(&token)?;
+    println!("Token stored.");
+    Ok(())
+}
+
 fn kimi_logout() -> Result<()> {
     let token_path = token_path()?;
+    let mut removed = false;
     if token_path.exists() {
         fs::remove_file(&token_path)?;
+        removed = true;
+    }
+    if clear_kimi_token_config()? {
+        removed = true;
+    }
+    if removed {
         println!("Token removed.");
     } else {
         println!("No token found.");
@@ -438,6 +474,26 @@ struct StoredToken {
     expires_at: i64,
     scope: String,
     token_type: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct LlmUsageConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kimi: Option<KimiTokenConfig>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct KimiTokenConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_type: Option<String>,
 }
 
 #[derive(Debug)]
@@ -632,6 +688,31 @@ fn data_dir() -> Result<PathBuf> {
     Ok(fallback)
 }
 
+fn config_dir(create: bool) -> Result<PathBuf> {
+    let base = if let Some(base) = BaseDirs::new() {
+        base.config_dir().to_path_buf()
+    } else if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home).join(".config")
+    } else {
+        PathBuf::from(".").join(".config")
+    };
+    let dir = base.join(CONFIG_DIR_NAME);
+    if create {
+        fs::create_dir_all(&dir)?;
+    }
+    Ok(dir)
+}
+
+fn config_path() -> Result<PathBuf> {
+    let dir = config_dir(true)?;
+    Ok(dir.join(CONFIG_FILENAME))
+}
+
+fn config_path_no_create() -> Result<PathBuf> {
+    let dir = config_dir(false)?;
+    Ok(dir.join(CONFIG_FILENAME))
+}
+
 fn load_or_create_device_id() -> Result<String> {
     let path = device_id_path()?;
     if path.exists() {
@@ -642,16 +723,76 @@ fn load_or_create_device_id() -> Result<String> {
     Ok(device_id)
 }
 
-fn load_token() -> Option<StoredToken> {
+fn load_config() -> Option<LlmUsageConfig> {
+    let path = config_path_no_create().ok()?;
+    let data = fs::read_to_string(path).ok()?;
+    toml::from_str(&data).ok()
+}
+
+fn save_config(config: &LlmUsageConfig) -> Result<()> {
+    let path = config_path()?;
+    let data = toml::to_string_pretty(config)?;
+    write_private_file(&path, data.as_bytes())?;
+    Ok(())
+}
+
+fn load_kimi_token_from_config() -> Option<StoredToken> {
+    let config = load_config()?;
+    config.kimi.and_then(|token| token.to_token())
+}
+
+fn save_kimi_token_config(token: &StoredToken) -> Result<()> {
+    let mut config = load_config().unwrap_or_default();
+    config.kimi = Some(KimiTokenConfig::from_token(token));
+    save_config(&config)
+}
+
+fn clear_kimi_token_config() -> Result<bool> {
+    let path = config_path_no_create()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+    let data = fs::read_to_string(&path)?;
+    match toml::from_str::<LlmUsageConfig>(&data) {
+        Ok(mut config) => {
+            if config.kimi.is_none() {
+                return Ok(false);
+            }
+            config.kimi = None;
+            if config.is_empty() {
+                fs::remove_file(&path)?;
+            } else {
+                save_config(&config)?;
+            }
+            Ok(true)
+        }
+        Err(_) => {
+            fs::remove_file(&path)?;
+            Ok(true)
+        }
+    }
+}
+
+fn load_token_from_json() -> Option<StoredToken> {
     let path = token_path().ok()?;
     let data = fs::read_to_string(path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
-fn save_token(token: &StoredToken) -> Result<()> {
+fn load_token() -> Option<StoredToken> {
+    load_kimi_token_from_config().or_else(load_token_from_json)
+}
+
+fn save_token_json(token: &StoredToken) -> Result<()> {
     let path = token_path()?;
     let data = serde_json::to_vec_pretty(token)?;
     write_private_file(&path, &data)?;
+    Ok(())
+}
+
+fn save_token(token: &StoredToken) -> Result<()> {
+    save_token_json(token)?;
+    save_kimi_token_config(token)?;
     Ok(())
 }
 
@@ -749,11 +890,46 @@ fn build_verification_url(auth: &DeviceAuthorization) -> String {
 
 impl StoredToken {
     fn needs_refresh(&self) -> bool {
+        if self.refresh_token.trim().is_empty() {
+            return false;
+        }
         if self.expires_at <= 0 {
             return true;
         }
         let now = now_unix();
         self.expires_at <= now + 300
+    }
+}
+
+impl LlmUsageConfig {
+    fn is_empty(&self) -> bool {
+        self.kimi.is_none()
+    }
+}
+
+impl KimiTokenConfig {
+    fn from_token(token: &StoredToken) -> Self {
+        Self {
+            access_token: Some(token.access_token.clone()),
+            refresh_token: Some(token.refresh_token.clone()),
+            expires_at: Some(token.expires_at),
+            scope: Some(token.scope.clone()),
+            token_type: Some(token.token_type.clone()),
+        }
+    }
+
+    fn to_token(&self) -> Option<StoredToken> {
+        let access_token = self.access_token.as_ref()?.trim().to_string();
+        if access_token.is_empty() {
+            return None;
+        }
+        Some(StoredToken {
+            access_token,
+            refresh_token: self.refresh_token.clone().unwrap_or_default(),
+            expires_at: self.expires_at.unwrap_or(0),
+            scope: self.scope.clone().unwrap_or_default(),
+            token_type: self.token_type.clone().unwrap_or_default(),
+        })
     }
 }
 

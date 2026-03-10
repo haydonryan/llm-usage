@@ -11,6 +11,15 @@ Fetches usage stats for Kimi and Codex (ChatGPT backend), plus OpenAI API billin
 
 ## Usage
 
+## Install
+
+Build and install the binary into `/usr/local/bin`:
+
+```bash
+cargo build --release
+sudo install -m 0755 target/release/llm-usage /usr/local/bin/llm-usage
+```
+
 ### Combined usage (default)
 
 ```bash
@@ -37,6 +46,14 @@ cargo run --release -- --json
 cargo run --release -- kimi login
 cargo run --release -- kimi usage
 ```
+
+Store a token directly (skips the device login flow):
+
+```bash
+cargo run --release -- kimi set-token "$KIMI_TOKEN"
+```
+
+After `kimi login`, the Kimi token is saved to `~/.config/llm-usage/llm-usage.toml`.
 
 Optional flags for Kimi usage:
 
