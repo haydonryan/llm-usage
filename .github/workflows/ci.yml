@@ -1,0 +1,190 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  CLICOLOR: 1
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "macos-latest"]
+        rust: ["stable", "beta"]
+        include:
+          - os: ubuntu-latest
+            rust: "stable"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Print Cargo Version
+        run: cargo -V
+      - name: Default features
+        run: cargo test --workspace
+      - name: All features
+        run: cargo test --workspace --all-features
+      - name: No-default features
+        run: cargo test --workspace --no-default-features
+
+  coverage:
+    name: Coverage (Tarpaulin)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tarpaulin
+        id: install-tarpaulin
+        continue-on-error: true
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Run Tarpaulin
+        id: tarpaulin
+        continue-on-error: true
+        if: steps.install-tarpaulin.outcome == 'success'
+        run: cargo tarpaulin --workspace --all-features --skip-clean --out Json --output-dir tarpaulin-report
+
+      - name: Build coverage comment body
+        id: coverage
+        if: always()
+        run: |
+          python <<'PY'
+          import json
+          from pathlib import Path
+
+          report = Path('tarpaulin-report/tarpaulin-report.json')
+          if report.exists():
+              summary = json.loads(report.read_text())
+              covered = summary.get('covered') or 0
+              coverable = summary.get('coverable') or 0
+              pct = summary.get('percent')
+              if pct is None:
+                  pct = (covered / coverable * 100) if coverable else 0.0
+
+              body = f'''<!-- rust-starter-coverage-comment -->
+              ## Coverage Report
+
+              - **Status:** Report generated
+              - **Total coverage:** {pct:.2f}%
+              - **Covered lines:** {covered}
+              - **Coverable lines:** {coverable}
+              - **Tool:** `cargo tarpaulin`
+              '''
+          else:
+              body = '''<!-- rust-starter-coverage-comment -->
+              ## Coverage Report
+
+              - **Status:** Coverage run failed
+              - **Details:** Coverage is reported for visibility only and does not fail this PR check.
+              - **Tool:** `cargo tarpaulin`
+              '''
+
+          Path('coverage-comment.md').write_text(body + "\n")
+          PY
+
+      - name: Find existing coverage comment
+        id: find-comment
+        if: always()
+        uses: peter-evans/find-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- rust-starter-coverage-comment -->'
+
+      - name: Create or update PR coverage comment
+        if: always()
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          edit-mode: replace
+          body-path: coverage-comment.md
+
+  Lint:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  Security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check all
+
+  detect-release-tag:
+    name: Detect Release Tag
+    runs-on: ubuntu-latest
+    needs: [check, test, Lint, Security]
+    if: github.event_name == 'push'
+    outputs:
+      tag: ${{ steps.detect.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fetch tags
+        run: git fetch --force --tags
+      - name: Detect release tag
+        id: detect
+        run: |
+          tag=$(git tag --points-at "${GITHUB_SHA}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Release
+    needs: [detect-release-tag]
+    if: needs.detect-release-tag.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.detect-release-tag.outputs.tag }}
+      release_sha: ${{ github.sha }}
