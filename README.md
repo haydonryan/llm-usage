@@ -40,6 +40,12 @@ To emit JSON instead of the human-readable summary:
 cargo run --release -- --json
 ```
 
+To show token/debug diagnostics when a service is unavailable:
+
+```bash
+cargo run --release -- --debug
+```
+
 ### Kimi usage
 
 ```bash
@@ -65,6 +71,7 @@ Optional environment variables for Kimi:
 
 - `KIMI_CODE_BASE_URL` to override the Kimi Code API base URL
 - `KIMI_CODE_OAUTH_HOST` or `KIMI_OAUTH_HOST` to override the OAuth host
+- `--debug` to show missing-token and other diagnostic errors in mixed output
 
 ### Codex usage limits
 

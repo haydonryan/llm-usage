@@ -40,6 +40,9 @@ struct Args {
     /// Kimi access token (used by the default `all` command)
     #[arg(long, global = true, value_name = "TOKEN")]
     kimi_token: Option<String>,
+    /// Show additional diagnostics, including missing-token details
+    #[arg(long, global = true)]
+    debug: bool,
     /// Output summary as JSON
     #[arg(long, global = true)]
     json: bool,
@@ -158,7 +161,7 @@ fn run() -> Result<()> {
     let command = args.command.unwrap_or(Command::All);
 
     match command {
-        Command::All => run_all(args.kimi_token, args.json),
+        Command::All => run_all(args.kimi_token, args.json, args.debug),
         Command::Kimi { command } => {
             let command = command.unwrap_or(KimiCommand::Usage(KimiUsageArgs::default()));
             run_kimi_command(command, args.kimi_token, args.json)
@@ -168,9 +171,11 @@ fn run() -> Result<()> {
     }
 }
 
-fn run_all(kimi_token: Option<String>, json: bool) -> Result<()> {
+const KIMI_TOKEN_MISSING_MESSAGE: &str = "No token found. Run `llm-usage kimi login` first.";
+
+fn run_all(kimi_token: Option<String>, json: bool, debug: bool) -> Result<()> {
     if json {
-        return run_all_json(kimi_token);
+        return run_all_json(kimi_token, debug);
     }
     let mut failures = Vec::new();
 
@@ -180,8 +185,14 @@ fn run_all(kimi_token: Option<String>, json: bool) -> Result<()> {
     };
 
     if let Err(err) = run_kimi_usage(kimi_args, true, false) {
-        eprintln!("Kimi usage error: {err}");
-        failures.push("kimi".to_string());
+        if is_kimi_missing_token_error(&err) {
+            if debug {
+                eprintln!("Kimi usage unavailable: {err}");
+            }
+        } else {
+            eprintln!("Kimi usage error: {err}");
+            failures.push("kimi".to_string());
+        }
     }
 
     println!();
@@ -201,7 +212,7 @@ fn run_all(kimi_token: Option<String>, json: bool) -> Result<()> {
     }
 }
 
-fn run_all_json(kimi_token: Option<String>) -> Result<()> {
+fn run_all_json(kimi_token: Option<String>, debug: bool) -> Result<()> {
     let mut failures = Vec::new();
     let mut errors = Vec::new();
     let mut kimi = None;
@@ -220,8 +231,14 @@ fn run_all_json(kimi_token: Option<String>) -> Result<()> {
             });
         }
         Err(err) => {
-            failures.push("kimi".to_string());
-            errors.push(format!("kimi: {err}"));
+            if is_kimi_missing_token_error(&err) {
+                if debug {
+                    errors.push(format!("kimi: {err}"));
+                }
+            } else {
+                failures.push("kimi".to_string());
+                errors.push(format!("kimi: {err}"));
+            }
         }
     }
 
@@ -257,6 +274,10 @@ fn run_all_json(kimi_token: Option<String>) -> Result<()> {
             failures.join(", ")
         ))
     }
+}
+
+fn is_kimi_missing_token_error(err: &anyhow::Error) -> bool {
+    err.to_string().contains(KIMI_TOKEN_MISSING_MESSAGE)
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<()> {
@@ -323,8 +344,7 @@ fn fetch_kimi_usage_payload(args: &KimiUsageArgs) -> Result<Value> {
     } else {
         let device_id = load_or_create_device_id()?;
         let headers = kimi_common_headers(&device_id)?;
-        let mut token = load_token()
-            .ok_or_else(|| anyhow!("No token found. Run `llm-usage kimi login` first."))?;
+        let mut token = load_token().ok_or_else(|| anyhow!(KIMI_TOKEN_MISSING_MESSAGE))?;
         if token.needs_refresh() {
             token = refresh_token(&client, &headers, &token)?;
             save_token(&token)?;
