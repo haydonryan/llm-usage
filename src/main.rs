@@ -549,8 +549,20 @@ struct KimiUsageJson {
 struct CodexUsageJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     plan: Option<String>,
-    rows: Vec<UsageRowJson>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    components: BTreeMap<String, BTreeMap<String, CodexUsageComponent>>,
     stale: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexUsageComponent {
+    limit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    percent_used: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    week_progress_percent: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1800,55 +1812,71 @@ fn build_codex_usage_json(
     captured_at: DateTime<Local>,
 ) -> CodexUsageJson {
     let snapshots = snapshots_from_payload(payload, captured_at);
-    let rows = codex_rows_to_json(&snapshots, captured_at);
+    let mut components = BTreeMap::new();
+    for snapshot in &snapshots {
+        let component_name = if snapshot.limit_name == "codex" {
+            payload
+                .plan_type
+                .as_ref()
+                .map(std::string::ToString::to_string)
+                .unwrap_or_else(|| snapshot.limit_name.clone())
+        } else {
+            snapshot.limit_name.clone()
+        };
+        let mut limits = BTreeMap::new();
+
+        if let Some(primary) = snapshot.primary.as_ref() {
+            let key = primary
+                .window_minutes
+                .map(get_limits_duration)
+                .unwrap_or_else(|| "5h".to_string())
+                .to_lowercase();
+            limits.insert(
+                key.clone(),
+                codex_window_to_component(&key, primary, captured_at),
+            );
+        }
+
+        if let Some(secondary) = snapshot.secondary.as_ref() {
+            let key = secondary
+                .window_minutes
+                .map(get_limits_duration)
+                .unwrap_or_else(|| "weekly".to_string())
+                .to_lowercase();
+            let component = codex_window_to_component(&key, secondary, captured_at);
+            limits.insert(key.clone(), component);
+        }
+
+        if !limits.is_empty() {
+            components.insert(component_name, limits);
+        }
+    }
+
     CodexUsageJson {
         plan: payload.plan_type.clone(),
-        rows,
+        components,
         stale: is_stale(&snapshots, captured_at),
     }
 }
 
-fn codex_rows_to_json(
-    snapshots: &[RateLimitSnapshotDisplay],
+fn codex_window_to_component(
+    key: &str,
+    window: &RateLimitWindowDisplay,
     captured_at: DateTime<Local>,
-) -> Vec<UsageRowJson> {
-    let rows = compose_rate_limit_rows(snapshots, captured_at);
-    rows.into_iter()
-        .map(|row| match row.value {
-            StatusRateLimitValue::Window {
-                percent_used,
-                resets_at,
-                reset_at,
-            } => {
-                let percent_used = percent_used.clamp(0.0, 100.0);
-                let week_progress_percent = if is_weekly_label(&row.label) {
-                    let progress = week_progress_percent(captured_at, reset_at);
-                    let progress_percent = (progress * 100.0).clamp(0.0, 100.0);
-                    Some(rounded_percent_value(progress_percent))
-                } else {
-                    None
-                };
-                let reset_at = reset_at.map(|dt| dt.to_rfc3339());
-                let reset_display = resets_at.map(|text| format!("resets {text}"));
-                UsageRowJson {
-                    label: row.label,
-                    percent_used: Some(rounded_percent_value(percent_used)),
-                    reset_at,
-                    reset_display,
-                    week_progress_percent,
-                    text: None,
-                }
-            }
-            StatusRateLimitValue::Text(text) => UsageRowJson {
-                label: row.label,
-                percent_used: None,
-                reset_at: None,
-                reset_display: None,
-                week_progress_percent: None,
-                text: Some(text),
-            },
-        })
-        .collect()
+) -> CodexUsageComponent {
+    let percent_used = rounded_percent_value(window.used_percent.clamp(0.0, 100.0));
+    let week_progress_percent = if key == "weekly" {
+        let progress = week_progress_percent(captured_at, window.reset_at);
+        Some(rounded_percent_value((progress * 100.0).clamp(0.0, 100.0)))
+    } else {
+        None
+    };
+    CodexUsageComponent {
+        limit: key.to_string(),
+        percent_used: Some(percent_used),
+        reset_at: window.reset_at.map(|dt| dt.to_rfc3339()),
+        week_progress_percent,
+    }
 }
 
 #[derive(Debug, Clone)]
