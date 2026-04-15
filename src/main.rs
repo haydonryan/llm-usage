@@ -179,25 +179,30 @@ fn run_all(kimi_token: Option<String>, json: bool, debug: bool) -> Result<()> {
     }
     let mut failures = Vec::new();
 
-    let kimi_args = KimiUsageArgs {
-        raw: false,
-        token: kimi_token,
-    };
+    if kimi_token.is_some() || has_kimi_token_config() {
+        let kimi_args = KimiUsageArgs {
+            raw: false,
+            token: kimi_token,
+        };
 
-    if let Err(err) = run_kimi_usage(kimi_args, true, false) {
-        if is_kimi_missing_token_error(&err) {
-            if debug {
-                eprintln!("Kimi usage unavailable: {err}");
+        if let Err(err) = run_kimi_usage(kimi_args, true, false) {
+            if is_kimi_missing_token_error(&err) {
+                if debug {
+                    eprintln!("Kimi usage unavailable: {err}");
+                }
+            } else {
+                eprintln!("Kimi usage error: {err}");
+                failures.push("kimi".to_string());
             }
-        } else {
-            eprintln!("Kimi usage error: {err}");
-            failures.push("kimi".to_string());
         }
     }
 
     println!();
 
-    if let Err(err) = run_chatgpt_limits(ChatgptLimitsArgs::default(), true, false) {
+    let codex_args = ChatgptLimitsArgs::default();
+    if codex_token_available(&codex_args)
+        && let Err(err) = run_chatgpt_limits(codex_args, true, false)
+    {
         eprintln!("Codex usage error: {err}");
         failures.push("codex".to_string());
     }
@@ -218,44 +223,49 @@ fn run_all_json(kimi_token: Option<String>, debug: bool) -> Result<()> {
     let mut kimi = None;
     let mut codex = None;
 
-    let kimi_args = KimiUsageArgs {
-        raw: false,
-        token: kimi_token,
-    };
+    if kimi_token.is_some() || has_kimi_token_config() {
+        let kimi_args = KimiUsageArgs {
+            raw: false,
+            token: kimi_token,
+        };
 
-    match fetch_kimi_usage_payload(&kimi_args) {
-        Ok(payload) => {
-            let rows = collect_kimi_rows(&payload);
-            kimi = Some(KimiUsageJson {
-                rows: kimi_rows_to_json(&rows),
-            });
-        }
-        Err(err) => {
-            if is_kimi_missing_token_error(&err) {
-                if debug {
+        match fetch_kimi_usage_payload(&kimi_args) {
+            Ok(payload) => {
+                let rows = collect_kimi_rows(&payload);
+                kimi = Some(KimiUsageJson {
+                    rows: kimi_rows_to_json(&rows),
+                });
+            }
+            Err(err) => {
+                if is_kimi_missing_token_error(&err) {
+                    if debug {
+                        errors.push(format!("kimi: {err}"));
+                    }
+                } else {
+                    failures.push("kimi".to_string());
                     errors.push(format!("kimi: {err}"));
                 }
-            } else {
-                failures.push("kimi".to_string());
-                errors.push(format!("kimi: {err}"));
             }
         }
     }
 
-    match fetch_chatgpt_limits_body(&ChatgptLimitsArgs::default()) {
-        Ok(body) => match parse_chatgpt_limits_payload(&body) {
-            Ok(payload) => {
-                let captured_at = Local::now();
-                codex = Some(build_codex_usage_json(&payload, captured_at));
-            }
+    let codex_args = ChatgptLimitsArgs::default();
+    if codex_token_available(&codex_args) {
+        match fetch_chatgpt_limits_body(&codex_args) {
+            Ok(body) => match parse_chatgpt_limits_payload(&body) {
+                Ok(payload) => {
+                    let captured_at = Local::now();
+                    codex = Some(build_codex_usage_json(&payload, captured_at));
+                }
+                Err(err) => {
+                    failures.push("codex".to_string());
+                    errors.push(format!("codex: {err}"));
+                }
+            },
             Err(err) => {
                 failures.push("codex".to_string());
                 errors.push(format!("codex: {err}"));
             }
-        },
-        Err(err) => {
-            failures.push("codex".to_string());
-            errors.push(format!("codex: {err}"));
         }
     }
 
@@ -344,7 +354,8 @@ fn fetch_kimi_usage_payload(args: &KimiUsageArgs) -> Result<Value> {
     } else {
         let device_id = load_or_create_device_id()?;
         let headers = kimi_common_headers(&device_id)?;
-        let mut token = load_token().ok_or_else(|| anyhow!(KIMI_TOKEN_MISSING_MESSAGE))?;
+        let mut token =
+            load_kimi_token_from_config().ok_or_else(|| anyhow!(KIMI_TOKEN_MISSING_MESSAGE))?;
         if token.needs_refresh() {
             token = refresh_token(&client, &headers, &token)?;
             save_token(&token)?;
@@ -805,14 +816,14 @@ fn clear_kimi_token_config() -> Result<bool> {
     }
 }
 
-fn load_token_from_json() -> Option<StoredToken> {
-    let path = token_path().ok()?;
-    let data = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&data).ok()
-}
-
-fn load_token() -> Option<StoredToken> {
-    load_kimi_token_from_config().or_else(load_token_from_json)
+fn has_kimi_token_config() -> bool {
+    let Some(path) = config_path_no_create().ok() else {
+        return false;
+    };
+    if !path.exists() {
+        return false;
+    }
+    load_kimi_token_from_config().is_some()
 }
 
 fn save_token_json(token: &StoredToken) -> Result<()> {
@@ -1422,6 +1433,33 @@ fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
         return Err(anyhow!("ChatGPT usage error ({status}): {body}"));
     }
     Ok(body)
+}
+
+fn codex_token_available(args: &ChatgptLimitsArgs) -> bool {
+    if args
+        .access_token
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|token| !token.is_empty())
+    {
+        return true;
+    }
+
+    if env::var("CHATGPT_ACCESS_TOKEN")
+        .ok()
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    load_codex_auth(args.auth_file.as_deref())
+        .ok()
+        .flatten()
+        .and_then(|auth| auth.tokens)
+        .and_then(|tokens| tokens.access_token)
+        .map(|token| !token.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn parse_chatgpt_limits_payload(body: &str) -> Result<RateLimitStatusPayload> {

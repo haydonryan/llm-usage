@@ -26,7 +26,7 @@ sudo install -m 0755 target/release/llm-usage /usr/local/bin/llm-usage
 cargo run --release
 ```
 
-The default command attempts to show both Kimi and Codex usage. If one section fails (missing tokens, etc.), the other section will still print and the command will exit non-zero.
+The default command shows Kimi usage only when a Kimi token is available and shows Codex usage only when a ChatGPT access token is available. If either section fails for reasons other than a missing token, the other section will still print and the command will exit non-zero.
 
 To pass a Kimi token directly for the default command:
 
