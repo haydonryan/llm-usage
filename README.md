@@ -13,7 +13,16 @@ Fetches usage stats for Kimi and Codex (ChatGPT backend), plus OpenAI API billin
 
 ## Install
 
-Build and install the binary into `/usr/local/bin`:
+For the standard local workflow, use the shared CLI recipes:
+
+```bash
+just build
+just check
+just test
+just install
+```
+
+If you want a manual release install into `/usr/local/bin`:
 
 ```bash
 cargo build --release
