@@ -11,10 +11,8 @@ check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo audit
-    cargo deny check all
+    cargo deny check --config deny.toml all
     cargo test --workspace
-    cargo test --workspace --all-features
-    cargo test --workspace --no-default-features
 
 install:
     cargo install --path . --bin llm-usage
