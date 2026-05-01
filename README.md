@@ -29,6 +29,20 @@ cargo build --release
 sudo install -m 0755 target/release/llm-usage /usr/local/bin/llm-usage
 ```
 
+## Development
+
+Enable the repo's pre-commit hook to run `just pre-commit` before each commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+You can run the same suite manually with:
+
+```bash
+just pre-commit
+```
+
 ### Combined usage (default)
 
 ```bash
