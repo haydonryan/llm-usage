@@ -1,3 +1,20 @@
+#![allow(
+    clippy::branches_sharing_code,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::or_fun_call,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::useless_let_if_seq
+)]
+
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -57,10 +74,10 @@ enum Command {
         #[command(subcommand)]
         command: Option<KimiCommand>,
     },
-    /// Codex usage limits from the ChatGPT backend
+    /// Codex usage limits from the `ChatGPT` backend
     #[command(alias = "chatgpt-limits")]
     Codex(ChatgptLimitsArgs),
-    /// OpenAI API billing costs for the current calendar month
+    /// `OpenAI` API billing costs for the current calendar month
     ApiCosts(ApiCostsArgs),
 }
 
@@ -95,16 +112,16 @@ struct KimiSetTokenArgs {
 
 #[derive(Parser, Debug, Clone)]
 struct ApiCostsArgs {
-    /// OpenAI API key (defaults to OPENAI_API_KEY)
+    /// `OpenAI` API key (defaults to `OPENAI_API_KEY`)
     #[arg(long)]
     api_key: Option<String>,
-    /// OpenAI organization ID (defaults to OPENAI_ORG)
+    /// `OpenAI` organization ID (defaults to `OPENAI_ORG`)
     #[arg(long)]
     org: Option<String>,
-    /// OpenAI project ID (defaults to OPENAI_PROJECT)
+    /// `OpenAI` project ID (defaults to `OPENAI_PROJECT`)
     #[arg(long)]
     project: Option<String>,
-    /// Base URL for the OpenAI API
+    /// Base URL for the `OpenAI` API
     #[arg(long, default_value = DEFAULT_OPENAI_BASE_URL)]
     base_url: String,
     /// Start time (RFC3339) or date (YYYY-MM-DD) for the usage window
@@ -120,16 +137,16 @@ struct ApiCostsArgs {
 
 #[derive(Parser, Debug, Clone)]
 struct ChatgptLimitsArgs {
-    /// ChatGPT access token (defaults to CHATGPT_ACCESS_TOKEN)
+    /// `ChatGPT` access token (defaults to `CHATGPT_ACCESS_TOKEN`)
     #[arg(long)]
     access_token: Option<String>,
-    /// ChatGPT account id (defaults to CHATGPT_ACCOUNT_ID)
+    /// `ChatGPT` account id (defaults to `CHATGPT_ACCOUNT_ID`)
     #[arg(long)]
     account_id: Option<String>,
     /// Path to Codex auth.json (defaults to ~/.codex/auth.json)
     #[arg(long)]
     auth_file: Option<String>,
-    /// Base URL for the ChatGPT backend
+    /// Base URL for the `ChatGPT` backend
     #[arg(long, default_value = DEFAULT_CHATGPT_BASE_URL)]
     base_url: String,
     /// Print raw JSON response
@@ -390,10 +407,10 @@ fn kimi_login() -> Result<()> {
     let mut auth = request_device_authorization(&client, &headers)?;
     let verification_url = build_verification_url(&auth);
     println!("Open this URL in your browser and complete login:");
-    println!("{}", verification_url);
+    println!("{verification_url}");
     println!("User code: {}", auth.user_code);
     if let Some(uri) = auth.verification_uri.as_ref() {
-        println!("Verification URI: {}", uri);
+        println!("Verification URI: {uri}");
     }
     println!("Waiting for authorization...");
 
@@ -406,7 +423,7 @@ fn kimi_login() -> Result<()> {
             auth = request_device_authorization(&client, &headers)?;
             let verification_url = build_verification_url(&auth);
             println!("Open this URL in your browser and complete login:");
-            println!("{}", verification_url);
+            println!("{verification_url}");
             println!("User code: {}", auth.user_code);
             started = now_unix();
         }
@@ -422,7 +439,7 @@ fn kimi_login() -> Result<()> {
                 auth = request_device_authorization(&client, &headers)?;
                 println!("Open this URL in your browser and complete login:");
                 let verification_url = build_verification_url(&auth);
-                println!("{}", verification_url);
+                println!("{verification_url}");
                 println!("User code: {}", auth.user_code);
                 started = now_unix();
             }
@@ -699,7 +716,7 @@ fn refresh_token(client: &Client, headers: &HeaderMap, token: &StoredToken) -> R
 
 fn parse_token_response(payload: &Value) -> Result<StoredToken> {
     let token: TokenResponse = serde_json::from_value(payload.clone())
-        .map_err(|_| anyhow!("Missing token fields in response"))?;
+        .map_err(|err| anyhow!("Missing token fields in response: {err}"))?;
     let expires_at = now_unix() + token.expires_in as i64;
     Ok(StoredToken {
         access_token: token.access_token,
@@ -796,23 +813,20 @@ fn clear_kimi_token_config() -> Result<bool> {
         return Ok(false);
     }
     let data = fs::read_to_string(&path)?;
-    match toml::from_str::<LlmUsageConfig>(&data) {
-        Ok(mut config) => {
-            if config.kimi.is_none() {
-                return Ok(false);
-            }
-            config.kimi = None;
-            if config.is_empty() {
-                fs::remove_file(&path)?;
-            } else {
-                save_config(&config)?;
-            }
-            Ok(true)
+    if let Ok(mut config) = toml::from_str::<LlmUsageConfig>(&data) {
+        if config.kimi.is_none() {
+            return Ok(false);
         }
-        Err(_) => {
+        config.kimi = None;
+        if config.is_empty() {
             fs::remove_file(&path)?;
-            Ok(true)
+        } else {
+            save_config(&config)?;
         }
+        Ok(true)
+    } else {
+        fs::remove_file(&path)?;
+        Ok(true)
     }
 }
 
@@ -854,7 +868,7 @@ fn set_private_permissions(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         if let Ok(mut perms) = fs::metadata(path).map(|m| m.permissions()) {
             perms.set_mode(0o600);
-            let _ = fs::set_permissions(path, perms);
+            drop(fs::set_permissions(path, perms));
         }
     }
 }
@@ -866,9 +880,10 @@ fn oauth_host() -> String {
 }
 
 fn kimi_common_headers(device_id: &str) -> Result<HeaderMap> {
-    let device_name = hostname::get()
-        .map(|h| h.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
+    let device_name = hostname::get().map_or_else(
+        |_| "unknown".to_string(),
+        |h| h.to_string_lossy().to_string(),
+    );
     let os = os_info::get();
     let device_model = if os.version().to_string().is_empty() {
         format!("{} {}", os.os_type(), env::consts::ARCH)
@@ -892,7 +907,7 @@ fn header_value(value: &str) -> Result<HeaderValue> {
 }
 
 fn ascii_sanitize(value: &str) -> String {
-    let mut sanitized: String = value.chars().filter(|c| c.is_ascii()).collect();
+    let mut sanitized: String = value.chars().filter(char::is_ascii).collect();
     sanitized = sanitized.trim().to_string();
     if sanitized.is_empty() {
         "unknown".to_string()
@@ -945,7 +960,7 @@ impl StoredToken {
 }
 
 impl LlmUsageConfig {
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.kimi.is_none()
     }
 }
@@ -1018,14 +1033,14 @@ fn print_kimi_usage_summary(rows: &[UsageRow]) {
         let percent_label = format_used_percent(percent);
         let reset = format_kimi_reset(row.reset_at, row.reset_hint.as_ref());
         let label = format!("{:width$}", row.label, width = label_width);
-        println!("{}: {} {}{}", label, bar, percent_label, reset);
+        println!("{label}: {bar} {percent_label}{reset}");
         if is_weekly_label(&row.label) {
             let progress = week_progress_percent(Local::now(), row.reset_at);
             let progress_percent = (progress * 100.0).clamp(0.0, 100.0);
             let progress_bar = render_week_progress_bar(progress_percent);
-            let label = format!("{:width$}", WEEK_PROGRESS_LABEL, width = label_width);
+            let label = format!("{WEEK_PROGRESS_LABEL:label_width$}");
             let progress_label = format_elapsed_percent(progress_percent);
-            println!("{}: {} {}", label, progress_bar, progress_label);
+            println!("{label}: {progress_bar} {progress_label}");
         }
     }
 }
@@ -1039,7 +1054,7 @@ fn kimi_rows_to_json(rows: &[UsageRow]) -> Vec<UsageRowJson> {
                 0.0
             };
             let percent = percent.clamp(0.0, 100.0);
-            let reset_at = row.reset_at.as_ref().map(|dt| dt.to_rfc3339());
+            let reset_at = row.reset_at.as_ref().map(chrono::DateTime::to_rfc3339);
             let reset_display = format_kimi_reset_text(row.reset_at, row.reset_hint.as_ref());
             let week_progress_percent = if is_weekly_label(&row.label) {
                 let progress = week_progress_percent(Local::now(), row.reset_at);
@@ -1072,8 +1087,10 @@ fn extract_limit_row(item: &Value, idx: usize) -> Option<UsageRow> {
         .or_else(|| item_map.get("title"))
         .or_else(|| detail.get("title"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("Limit #{}", idx + 1));
+        .map_or_else(
+            || format!("Limit #{}", idx + 1),
+            std::string::ToString::to_string,
+        );
     to_usage_row(detail, &label)
 }
 
@@ -1105,7 +1122,7 @@ fn to_usage_row(data: &Map<String, Value>, default_label: &str) -> Option<UsageR
 fn reset_hint(data: &Map<String, Value>) -> Option<String> {
     for key in ["reset_at", "resetAt", "reset_time", "resetTime"] {
         if let Some(val) = data.get(key).and_then(|v| v.as_str()) {
-            return Some(format!("resets at {}", val));
+            return Some(format!("resets at {val}"));
         }
     }
     None
@@ -1120,7 +1137,7 @@ fn format_kimi_reset_text(
         let day = reset_at.format("%a %b %-d").to_string();
         return Some(format!("resets {time} on {day}"));
     }
-    reset_hint.map(|hint| hint.to_string())
+    reset_hint.cloned()
 }
 
 fn format_kimi_reset(reset_at: Option<DateTime<Local>>, reset_hint: Option<&String>) -> String {
@@ -1159,7 +1176,7 @@ fn parse_reset_value(value: &Value) -> Option<DateTime<Local>> {
     }
 }
 
-fn parse_epoch(value: i64) -> Option<DateTime<Utc>> {
+const fn parse_epoch(value: i64) -> Option<DateTime<Utc>> {
     let seconds = if value.abs() > 1_000_000_000_000 {
         value / 1_000
     } else {
@@ -1188,7 +1205,7 @@ fn week_progress_percent(now: DateTime<Local>, reset_at: Option<DateTime<Local>>
         return (elapsed.num_seconds() as f64 / week.num_seconds() as f64).clamp(0.0, 1.0);
     }
 
-    let days_from_monday = now.weekday().num_days_from_monday() as i64;
+    let days_from_monday = i64::from(now.weekday().num_days_from_monday());
     let start_naive = now.date_naive() - chrono::Duration::days(days_from_monday);
     let start_naive = match start_naive.and_hms_opt(0, 0, 0) {
         Some(value) => value,
@@ -1255,7 +1272,7 @@ fn run_api_costs(args: ApiCostsArgs, json: bool) -> Result<()> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", api_key))?,
+        HeaderValue::from_str(&format!("Bearer {api_key}"))?,
     );
     if let Some(org) = org {
         headers.insert("OpenAI-Organization", HeaderValue::from_str(&org)?);
@@ -1295,7 +1312,7 @@ fn run_api_costs(args: ApiCostsArgs, json: bool) -> Result<()> {
             end: format_time(end),
             total_cost: summary.total_cost,
             currency: summary.currency.clone(),
-            line_items: summary.line_items.clone(),
+            line_items: summary.line_items,
             reset_time_utc: format_time(next_month_start),
             reset_time_local: format_time(next_month_start.with_timezone(&Local)),
         };
@@ -1365,7 +1382,7 @@ fn run_chatgpt_limits(args: ChatgptLimitsArgs, include_header: bool, json: bool)
     }
 
     if let Some(plan) = payload.plan_type.as_deref() {
-        println!("Plan: {}", plan);
+        println!("Plan: {plan}");
     }
     for line in render_rate_limit_lines(&snapshots, captured_at) {
         println!("{line}");
@@ -1414,7 +1431,7 @@ fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
     let mut headers = HeaderMap::new();
     headers.insert(
         AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", access_token))?,
+        HeaderValue::from_str(&format!("Bearer {access_token}"))?,
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("llm-usage"));
     if let Some(account_id) = account_id {
@@ -1447,8 +1464,7 @@ fn codex_token_available(args: &ChatgptLimitsArgs) -> bool {
 
     if env::var("CHATGPT_ACCESS_TOKEN")
         .ok()
-        .map(|token| !token.trim().is_empty())
-        .unwrap_or(false)
+        .is_some_and(|token| !token.trim().is_empty())
     {
         return true;
     }
@@ -1458,8 +1474,7 @@ fn codex_token_available(args: &ChatgptLimitsArgs) -> bool {
         .flatten()
         .and_then(|auth| auth.tokens)
         .and_then(|tokens| tokens.access_token)
-        .map(|token| !token.trim().is_empty())
-        .unwrap_or(false)
+        .is_some_and(|token| !token.trim().is_empty())
 }
 
 fn parse_chatgpt_limits_payload(body: &str) -> Result<RateLimitStatusPayload> {
@@ -1552,13 +1567,13 @@ fn extract_amount(value: &Value) -> Option<(f64, Option<String>)> {
             let mut currency = map
                 .get("currency")
                 .and_then(|v| v.as_str())
-                .map(|v| v.to_string());
+                .map(std::string::ToString::to_string);
 
-            if let Some(val) = map.get("value").and_then(|v| v.as_f64()) {
+            if let Some(val) = map.get("value").and_then(serde_json::Value::as_f64) {
                 return Some((val, currency));
             }
 
-            if let Some(val) = map.get("amount").and_then(|v| v.as_f64()) {
+            if let Some(val) = map.get("amount").and_then(serde_json::Value::as_f64) {
                 return Some((val, currency));
             }
 
@@ -1822,7 +1837,7 @@ fn render_rate_limit_lines(
                 let bar = render_status_limit_progress_bar(percent_used);
                 let summary = format_status_limit_summary(percent_used);
                 let label = format!("{:width$}", row.label, width = label_width);
-                let mut line = format!("{}: {} {}", label, bar, summary);
+                let mut line = format!("{label}: {bar} {summary}");
                 if let Some(resets_at) = resets_at {
                     line.push_str(&format!(" (resets {resets_at})"));
                 }
@@ -1831,9 +1846,9 @@ fn render_rate_limit_lines(
                     let progress = week_progress_percent(captured_at, reset_at);
                     let progress_percent = (progress * 100.0).clamp(0.0, 100.0);
                     let progress_bar = render_week_progress_bar(progress_percent);
-                    let label = format!("{:width$}", WEEK_PROGRESS_LABEL, width = label_width);
+                    let label = format!("{WEEK_PROGRESS_LABEL:label_width$}");
                     let progress_label = format_elapsed_percent(progress_percent);
-                    lines.push(format!("{}: {} {}", label, progress_bar, progress_label));
+                    lines.push(format!("{label}: {progress_bar} {progress_label}"));
                 }
             }
             StatusRateLimitValue::Text(text) => {
@@ -1853,11 +1868,10 @@ fn build_codex_usage_json(
     let mut components = BTreeMap::new();
     for snapshot in &snapshots {
         let component_name = if snapshot.limit_name == "codex" {
-            payload
-                .plan_type
-                .as_ref()
-                .map(std::string::ToString::to_string)
-                .unwrap_or_else(|| snapshot.limit_name.clone())
+            payload.plan_type.as_ref().map_or_else(
+                || snapshot.limit_name.clone(),
+                std::string::ToString::to_string,
+            )
         } else {
             snapshot.limit_name.clone()
         };
@@ -1866,8 +1880,7 @@ fn build_codex_usage_json(
         if let Some(primary) = snapshot.primary.as_ref() {
             let key = primary
                 .window_minutes
-                .map(get_limits_duration)
-                .unwrap_or_else(|| "5h".to_string())
+                .map_or_else(|| "5h".to_string(), get_limits_duration)
                 .to_lowercase();
             limits.insert(
                 key.clone(),
@@ -1878,8 +1891,7 @@ fn build_codex_usage_json(
         if let Some(secondary) = snapshot.secondary.as_ref() {
             let key = secondary
                 .window_minutes
-                .map(get_limits_duration)
-                .unwrap_or_else(|| "weekly".to_string())
+                .map_or_else(|| "weekly".to_string(), get_limits_duration)
                 .to_lowercase();
             let component = codex_window_to_component(&key, secondary, captured_at);
             limits.insert(key.clone(), component);
@@ -1944,14 +1956,12 @@ fn compose_rate_limit_rows(
         let primary_label = snapshot.primary.as_ref().map(|window| {
             window
                 .window_minutes
-                .map(get_limits_duration)
-                .unwrap_or_else(|| "5h".to_string())
+                .map_or_else(|| "5h".to_string(), get_limits_duration)
         });
         let secondary_label = snapshot.secondary.as_ref().map(|window| {
             window
                 .window_minutes
-                .map(get_limits_duration)
-                .unwrap_or_else(|| "weekly".to_string())
+                .map_or_else(|| "weekly".to_string(), get_limits_duration)
         });
         let window_count =
             usize::from(snapshot.primary.is_some()) + usize::from(snapshot.secondary.is_some());
@@ -1968,9 +1978,9 @@ fn compose_rate_limit_rows(
             let primary_label =
                 format_limit_label(primary_label.clone().unwrap_or_else(|| "5h".to_string()));
             let label = if combine_non_codex_single_limit {
-                format!("{} {} limit", limit_bucket_label, primary_label)
+                format!("{limit_bucket_label} {primary_label} limit")
             } else {
-                format!("{} limit", primary_label)
+                format!("{primary_label} limit")
             };
             rows.push(StatusRateLimitRow {
                 label,
@@ -1989,9 +1999,9 @@ fn compose_rate_limit_rows(
                     .unwrap_or_else(|| "weekly".to_string()),
             );
             let label = if combine_non_codex_single_limit {
-                format!("{} {} limit", limit_bucket_label, secondary_label)
+                format!("{limit_bucket_label} {secondary_label} limit")
             } else {
-                format!("{} limit", secondary_label)
+                format!("{secondary_label} limit")
             };
             rows.push(StatusRateLimitRow {
                 label,
@@ -2073,18 +2083,18 @@ fn format_status_limit_summary(percent_used: f64) -> String {
     format_used_percent(percent_used)
 }
 
-fn rounded_percent_value(percent: f64) -> i64 {
+const fn rounded_percent_value(percent: f64) -> i64 {
     percent.round().clamp(0.0, 100.0) as i64
 }
 
 fn format_used_percent(percent_used: f64) -> String {
     let rounded = rounded_percent_value(percent_used);
-    format!("{:>3}% used", rounded)
+    format!("{rounded:>3}% used")
 }
 
 fn format_elapsed_percent(percent_elapsed: f64) -> String {
     let rounded = rounded_percent_value(percent_elapsed);
-    format!("{:>3}% elapsed", rounded)
+    format!("{rounded:>3}% elapsed")
 }
 
 fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
@@ -2131,12 +2141,11 @@ fn is_stale(snapshots: &[RateLimitSnapshotDisplay], now: DateTime<Local>) -> boo
 }
 
 fn load_codex_auth(path: Option<&str>) -> Result<Option<CodexAuthFile>> {
-    let path = match path {
-        Some(path) => path.to_string(),
-        None => {
-            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{home}/.codex/auth.json")
-        }
+    let path = if let Some(path) = path {
+        path.to_string()
+    } else {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{home}/.codex/auth.json")
     };
     let path = std::path::Path::new(&path);
     if !path.exists() {
