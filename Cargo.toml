@@ -11,8 +11,18 @@ clap = { version = "4.6", features = ["derive"] }
 directories = "6.0.0"
 hostname = "0.4.2"
 os_info = "3.14.0"
-reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "form", "json", "query", "rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.1"
 uuid = { version = "1.23.1", features = ["v4"] }
+
+[lints.clippy]
+dbg_macro = "deny"
+get_unwrap = "deny"
+let_underscore_must_use = "deny"
+map_err_ignore = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unused_result_ok = "deny"
