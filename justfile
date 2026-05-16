@@ -26,5 +26,5 @@ test:
 benchmark:
     ./scripts/benchmark.sh
 
-update:
+dep-bump:
     ./scripts/update-dependencies.sh
