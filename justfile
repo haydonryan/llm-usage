@@ -22,3 +22,9 @@ run *args:
 
 test:
     cargo test --workspace
+
+benchmark:
+    ./scripts/benchmark.sh
+
+update:
+    ./scripts/update-dependencies.sh
