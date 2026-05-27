@@ -2157,3 +2157,13 @@ fn load_codex_auth(path: Option<&str>) -> Result<Option<CodexAuthFile>> {
         serde_json::from_str(&contents).context("invalid JSON in auth file")?;
     Ok(Some(auth))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn week_progress_bar_uses_dash_fill_and_space_empty() {
+        assert_eq!(render_week_progress_bar(57.0), "[------------        ]");
+    }
+}
