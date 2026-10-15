@@ -5,25 +5,36 @@ export CARGO_TERM_COLOR=always
 export CLICOLOR=1
 export RUST_BACKTRACE=1
 
-: "${GIT_BRANCH:?GIT_BRANCH is required}"
-: "${GIT_COMMIT_NAME:?GIT_COMMIT_NAME is required}"
-: "${GIT_COMMIT_EMAIL:?GIT_COMMIT_EMAIL is required}"
-: "${GIT_PRIVATE_KEY:?GIT_PRIVATE_KEY is required}"
+# CI may provide explicit git settings. Local runs fall back to the
+# repository's current branch, git user, and existing credential setup.
+GIT_BRANCH="${GIT_BRANCH:-$(git branch --show-current)}"
+if [[ -z "${GIT_BRANCH}" ]]; then
+  echo "GIT_BRANCH is not set and the current branch could not be detected." >&2
+  exit 1
+fi
 
-git config user.name "${GIT_COMMIT_NAME}"
-git config user.email "${GIT_COMMIT_EMAIL}"
+if [[ -n "${GIT_COMMIT_NAME:-}" ]]; then
+  git config user.name "${GIT_COMMIT_NAME}"
+elif ! git config user.name >/dev/null; then
+  echo "GIT_COMMIT_NAME is not set and git config user.name is missing." >&2
+  exit 1
+fi
 
-mkdir -p "${HOME}/.ssh"
-chmod 700 "${HOME}/.ssh"
-printf '%s\n' "${GIT_PRIVATE_KEY}" > "${HOME}/.ssh/id_ed25519"
-chmod 600 "${HOME}/.ssh/id_ed25519"
+if [[ -n "${GIT_COMMIT_EMAIL:-}" ]]; then
+  git config user.email "${GIT_COMMIT_EMAIL}"
+elif ! git config user.email >/dev/null; then
+  echo "GIT_COMMIT_EMAIL is not set and git config user.email is missing." >&2
+  exit 1
+fi
 
-cat > "${HOME}/.ssh/config" <<'EOF'
-Host github.com
-  IdentityFile ~/.ssh/id_ed25519
-  StrictHostKeyChecking accept-new
-EOF
-chmod 600 "${HOME}/.ssh/config"
+if [[ -n "${GIT_PRIVATE_KEY:-}" ]]; then
+  mkdir -p "${HOME}/.ssh"
+  chmod 700 "${HOME}/.ssh"
+  dep_bump_key="${HOME}/.ssh/dep_bump_id_ed25519"
+  printf '%s\n' "${GIT_PRIVATE_KEY}" > "${dep_bump_key}"
+  chmod 600 "${dep_bump_key}"
+  export GIT_SSH_COMMAND="ssh -i ${dep_bump_key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+fi
 
 manifest_pathspec=('Cargo.lock' ':(glob)**/Cargo.toml')
 had_failed_upgrades=0
