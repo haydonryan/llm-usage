@@ -272,7 +272,12 @@ fn run_all_json(kimi_token: Option<String>, debug: bool) -> Result<()> {
             Ok(body) => match parse_chatgpt_limits_payload(&body) {
                 Ok(payload) => {
                     let captured_at = Local::now();
-                    codex = Some(build_codex_usage_json(&payload, captured_at));
+                    let resets = fetch_codex_reset_credits(&codex_args);
+                    codex = Some(build_codex_usage_json(
+                        &payload,
+                        resets.as_ref(),
+                        captured_at,
+                    ));
                 }
                 Err(err) => {
                     failures.push("codex".to_string());
@@ -579,7 +584,30 @@ struct CodexUsageJson {
     plan: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     components: BTreeMap<String, BTreeMap<String, CodexUsageComponent>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_credits: Option<CodexResetCreditsJson>,
     stale: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexResetCreditsJson {
+    available_count: i64,
+    credits: Vec<CodexResetCreditJson>,
+}
+
+#[derive(Debug, Serialize)]
+struct CodexResetCreditJson {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    granted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1370,9 +1398,10 @@ fn run_chatgpt_limits(args: ChatgptLimitsArgs, include_header: bool, json: bool)
     }
     let captured_at = Local::now();
     let payload = parse_chatgpt_limits_payload(&body)?;
+    let resets = fetch_codex_reset_credits(&args);
     let snapshots = snapshots_from_payload(&payload, captured_at);
     if json {
-        let output = build_codex_usage_json(&payload, captured_at);
+        let output = build_codex_usage_json(&payload, resets.as_ref(), captured_at);
         print_json(&output)?;
         return Ok(());
     }
@@ -1387,13 +1416,16 @@ fn run_chatgpt_limits(args: ChatgptLimitsArgs, include_header: bool, json: bool)
     for line in render_rate_limit_lines(&snapshots, captured_at) {
         println!("{line}");
     }
+    for line in render_reset_credit_lines(resets.as_ref(), &payload) {
+        println!("{line}");
+    }
     if is_stale(&snapshots, captured_at) {
         println!("Warning: limits may be stale - start a new turn to refresh.");
     }
     Ok(())
 }
 
-fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
+fn codex_credentials(args: &ChatgptLimitsArgs) -> Result<(String, Option<String>)> {
     let mut access_token = args
         .access_token
         .clone()
@@ -1423,9 +1455,13 @@ fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
     let access_token = access_token.context(
         "missing ChatGPT access token (set --access-token, CHATGPT_ACCESS_TOKEN, or ~/.codex/auth.json)",
     )?;
+    Ok((access_token, account_id))
+}
 
+fn fetch_chatgpt_get(args: &ChatgptLimitsArgs, path: &str, intent: &str) -> Result<String> {
+    let (access_token, account_id) = codex_credentials(args)?;
     let base_url = args.base_url.trim_end_matches('/');
-    let url = format!("{base_url}/wham/usage");
+    let url = format!("{base_url}{path}");
 
     let client = client()?;
     let mut headers = HeaderMap::new();
@@ -1442,7 +1478,7 @@ fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
         .get(url)
         .headers(headers)
         .send()
-        .context("failed to call ChatGPT usage endpoint")?;
+        .context(intent.to_string())?;
 
     let status = response.status();
     let body = response.text().context("failed to read response")?;
@@ -1450,6 +1486,25 @@ fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
         return Err(anyhow!("ChatGPT usage error ({status}): {body}"));
     }
     Ok(body)
+}
+
+fn fetch_chatgpt_limits_body(args: &ChatgptLimitsArgs) -> Result<String> {
+    fetch_chatgpt_get(args, "/wham/usage", "failed to call ChatGPT usage endpoint")
+}
+
+fn fetch_chatgpt_reset_credits_body(args: &ChatgptLimitsArgs) -> Result<String> {
+    fetch_chatgpt_get(
+        args,
+        "/wham/rate-limit-reset-credits",
+        "failed to call ChatGPT rate-limit reset credits endpoint",
+    )
+}
+
+/// Fetch available rate-limit reset credits. Non-fatal: any failure yields `None`
+/// so the rest of the codex usage output still renders.
+fn fetch_codex_reset_credits(args: &ChatgptLimitsArgs) -> Option<RateLimitResetCreditsDetails> {
+    let body = fetch_chatgpt_reset_credits_body(args).ok()?;
+    serde_json::from_str(&body).ok()
 }
 
 fn codex_token_available(args: &ChatgptLimitsArgs) -> bool {
@@ -1650,6 +1705,37 @@ struct RateLimitStatusPayload {
     credits: Option<CreditStatusDetails>,
     #[serde(default)]
     additional_rate_limits: Option<Vec<AdditionalRateLimitDetails>>,
+    #[serde(default)]
+    rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitResetCreditsSummary {
+    #[serde(default)]
+    available_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitResetCreditsDetails {
+    #[serde(default)]
+    credits: Vec<RateLimitResetCreditDetails>,
+    #[serde(default)]
+    available_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateLimitResetCreditDetails {
+    id: String,
+    #[serde(default)]
+    reset_type: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    granted_at: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1810,6 +1896,37 @@ fn window_display(
     }
 }
 
+fn render_reset_credit_lines(
+    resets: Option<&RateLimitResetCreditsDetails>,
+    payload: &RateLimitStatusPayload,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let (count, credits): (i64, Option<&Vec<RateLimitResetCreditDetails>>) =
+        if let Some(details) = resets {
+            (details.available_count, Some(&details.credits))
+        } else {
+            let count = payload
+                .rate_limit_reset_credits
+                .as_ref()
+                .map_or(0, |summary| summary.available_count);
+            (count, None)
+        };
+    if count <= 0 && credits.is_none_or(Vec::is_empty) {
+        return lines;
+    }
+    lines.push(format!("Resets available: {count}"));
+    if let Some(credits) = credits {
+        for credit in credits {
+            let expiry = credit
+                .expires_at
+                .as_deref()
+                .map_or_else(|| "no expiry".to_string(), format_reset_expiry);
+            lines.push(format!("  - expires {expiry}"));
+        }
+    }
+    lines
+}
+
 fn render_rate_limit_lines(
     snapshots: &[RateLimitSnapshotDisplay],
     captured_at: DateTime<Local>,
@@ -1862,6 +1979,7 @@ fn render_rate_limit_lines(
 
 fn build_codex_usage_json(
     payload: &RateLimitStatusPayload,
+    resets: Option<&RateLimitResetCreditsDetails>,
     captured_at: DateTime<Local>,
 ) -> CodexUsageJson {
     let snapshots = snapshots_from_payload(payload, captured_at);
@@ -1905,7 +2023,26 @@ fn build_codex_usage_json(
     CodexUsageJson {
         plan: payload.plan_type.clone(),
         components,
+        reset_credits: resets.map(codex_reset_credits_json),
         stale: is_stale(&snapshots, captured_at),
+    }
+}
+
+fn codex_reset_credits_json(details: &RateLimitResetCreditsDetails) -> CodexResetCreditsJson {
+    CodexResetCreditsJson {
+        available_count: details.available_count,
+        credits: details
+            .credits
+            .iter()
+            .map(|credit| CodexResetCreditJson {
+                id: credit.id.clone(),
+                reset_type: credit.reset_type.clone(),
+                status: credit.status.clone(),
+                granted_at: credit.granted_at.clone(),
+                expires_at: credit.expires_at.clone(),
+                title: credit.title.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -2102,6 +2239,17 @@ fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> 
     dt.format("%H:%M on %a %b %-d").to_string()
 }
 
+fn format_reset_expiry(expires_at: &str) -> String {
+    DateTime::parse_from_rfc3339(expires_at).map_or_else(
+        |_| expires_at.to_string(),
+        |dt| {
+            dt.with_timezone(&Local)
+                .format("%a %b %-d %Y %H:%M")
+                .to_string()
+        },
+    )
+}
+
 fn format_limit_label(label: String) -> String {
     match label.as_str() {
         "weekly" => "Weekly".to_string(),
@@ -2165,5 +2313,70 @@ mod tests {
     #[test]
     fn week_progress_bar_uses_dash_fill_and_space_empty() {
         assert_eq!(render_week_progress_bar(57.0), "[------------        ]");
+    }
+
+    #[test]
+    fn reset_credits_render_count_and_expiry() {
+        let details = RateLimitResetCreditsDetails {
+            available_count: 2,
+            credits: vec![
+                RateLimitResetCreditDetails {
+                    id: "credit-1".into(),
+                    reset_type: Some("codex_rate_limits".into()),
+                    status: Some("available".into()),
+                    granted_at: Some("2026-06-17T00:00:00Z".into()),
+                    expires_at: Some("2026-07-17T00:00:00Z".into()),
+                    title: Some("Reset".into()),
+                },
+                RateLimitResetCreditDetails {
+                    id: "credit-2".into(),
+                    reset_type: Some("codex_rate_limits".into()),
+                    status: Some("available".into()),
+                    granted_at: Some("2026-06-17T00:00:00Z".into()),
+                    expires_at: None,
+                    title: Some("Reset".into()),
+                },
+            ],
+        };
+        let payload = RateLimitStatusPayload {
+            plan_type: None,
+            rate_limit: None,
+            credits: None,
+            additional_rate_limits: None,
+            rate_limit_reset_credits: None,
+        };
+        let lines = render_reset_credit_lines(Some(&details), &payload);
+        assert_eq!(lines[0], "Resets available: 2");
+        assert!(lines[1].starts_with("  - expires "));
+        assert_eq!(lines[2], "  - expires no expiry");
+    }
+
+    #[test]
+    fn reset_credits_hidden_when_none_available() {
+        let details = RateLimitResetCreditsDetails {
+            available_count: 0,
+            credits: vec![],
+        };
+        let payload = RateLimitStatusPayload {
+            plan_type: None,
+            rate_limit: None,
+            credits: None,
+            additional_rate_limits: None,
+            rate_limit_reset_credits: None,
+        };
+        assert!(render_reset_credit_lines(Some(&details), &payload).is_empty());
+    }
+
+    #[test]
+    fn reset_credits_falls_back_to_usage_summary_count() {
+        let payload = RateLimitStatusPayload {
+            plan_type: None,
+            rate_limit: None,
+            credits: None,
+            additional_rate_limits: None,
+            rate_limit_reset_credits: Some(RateLimitResetCreditsSummary { available_count: 3 }),
+        };
+        let lines = render_reset_credit_lines(None, &payload);
+        assert_eq!(lines, vec!["Resets available: 3"]);
     }
 }

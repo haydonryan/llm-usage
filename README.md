@@ -104,6 +104,17 @@ export CHATGPT_ACCESS_TOKEN="your_chatgpt_access_token"
 cargo run --release -- codex
 ```
 
+When the account has any available, the output also shows how many rate-limit
+reset credits are available and each one's expiry date:
+
+```
+Resets available: 2
+  - expires Fri Jul 17 2026 00:00
+  - expires no expiry
+```
+
+The count and expiry are also emitted in `--json` output under `reset_credits`.
+
 You can also use the legacy command name:
 
 ```bash
